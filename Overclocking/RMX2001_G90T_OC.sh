@@ -1,43 +1,43 @@
 #!/system/bin/sh
-2
-3# =============================================================
-4#  Overclock your device to the max (only for G90T devices)!
-5#  Author   : Arhan Das
-6#  Assisted by Claude (Anthropic)
-7#  Version  : V3.2 - Dynamic device info header
-8# =============================================================
-9
-10clear
-11
-12# Gather device info dynamically
-13DEVICE_MODEL=$(getprop ro.product.model)
-14DEVICE_CODENAME=$(getprop ro.product.device)
-15DEVICE_BRAND=$(getprop ro.product.brand)
-16CHIPSET=$(getprop ro.board.platform)
-17ROM_NAME=$(getprop ro.build.display.id)
-18ANDROID_VER=$(getprop ro.build.version.release)
-19KERNEL_VER=$(uname -r)
-20CPU_MAX_LITTLE=$(cat /sys/devices/system/cpu/cpufreq/policy0/cpuinfo_max_freq 2>/dev/null)
-21CPU_MAX_BIG=$(cat /sys/devices/system/cpu/cpufreq/policy6/cpuinfo_max_freq 2>/dev/null)
-22RAM_TOTAL=$(cat /proc/meminfo | grep MemTotal | awk '{printf "%.0f MB", $2/1024}')
-23
-24echo "============================================="
-25echo " Overclock your device to the max (only for G90T devices)"
-26echo "============================================="
-27echo " Device   : $DEVICE_BRAND $DEVICE_MODEL ($DEVICE_CODENAME)"
-28echo " Chipset  : $CHIPSET"
-29echo " Android  : $ANDROID_VER"
-30echo " ROM      : $ROM_NAME"
-31echo " Kernel   : $KERNEL_VER"
-32echo " CPU      : Little $(( CPU_MAX_LITTLE / 1000 ))MHz | Big $(( CPU_MAX_BIG / 1000 ))MHz"
-33echo " RAM      : $RAM_TOTAL"
-34echo "============================================="
-35echo " Author   : Arhan Das"
-36echo "============================================="
-37echo " Warning: This will overclock your device to the max."
-38echo " Device will heat up. Use at your own risk."
-39echo "============================================="
-40echo
+
+# =============================================================
+#  High Performance Script
+#  Author   : Arhan Das
+#  Version  : V3.2 - Dynamic device info header
+# =============================================================
+
+clear
+
+# Gather device info dynamically
+DEVICE_MODEL=$(getprop ro.product.model)
+DEVICE_CODENAME=$(getprop ro.product.device)
+DEVICE_BRAND=$(getprop ro.product.brand)
+CHIPSET=$(getprop ro.board.platform)
+ROM_NAME=$(getprop ro.build.display.id)
+ANDROID_VER=$(getprop ro.build.version.release)
+KERNEL_VER=$(uname -r)
+CPU_MAX_LITTLE=$(cat /sys/devices/system/cpu/cpufreq/policy0/cpuinfo_max_freq 2>/dev/null)
+CPU_MAX_BIG=$(cat /sys/devices/system/cpu/cpufreq/policy6/cpuinfo_max_freq 2>/dev/null)
+RAM_TOTAL=$(cat /proc/meminfo | grep MemTotal | awk '{printf "%.0f MB", $2/1024}')
+
+echo "============================================="
+echo " High Performance Mode"
+echo "============================================="
+echo " Device   : $DEVICE_BRAND $DEVICE_MODEL ($DEVICE_CODENAME)"
+echo " Chipset  : $CHIPSET"
+echo " Android  : $ANDROID_VER"
+echo " ROM      : $ROM_NAME"
+echo " Kernel   : $KERNEL_VER"
+echo " CPU      : Little $(( CPU_MAX_LITTLE / 1000 ))MHz | Big $(( CPU_MAX_BIG / 1000 ))MHz"
+echo " RAM      : $RAM_TOTAL"
+echo "============================================="
+echo " Author   : Arhan Das"
+echo "============================================="
+echo " Enabling SoC Overclocking if kernel supports it"
+echo " Warning: This mode maximises performance."
+echo " Device will heat up. Use at your own risk."
+echo "============================================="
+echo
 
 # -------------------------------------------------------------
 # tweak() - Write value and lock file with chmod 444
@@ -456,10 +456,8 @@ echo "Background apps cleared"
 echo
 
 echo "============================================="
-echo " Overclocking is ACTIVE if your kernel supports it"
+echo " High Performance Mode V3 is ACTIVE"
 echo " For best experience, enable all 8 CPUs"
-echo " Made with love by Arhan Das"
-echo "============================================="
-echo " Enjoy your overclocked experience!"
+echo " Author  : Arhan Das | Assisted by Claude"
 echo "============================================="
 echo
