@@ -9,10 +9,10 @@ Author: **Arhan Das**
 
 ## Scripts
 
-| Script                     | Purpose                                               |
-| -------------------------- | ----------------------------------------------------- |
-| `RMX2001_G90T_OC.sh`       | High Performance V4 / overclock — gaming & benchmarks |
-| `RMX2001_G90T_balanced.sh` | Balanced — smooth daily use with efficient battery    |
+| Script                     | Purpose                                                  |
+| -------------------------- | -------------------------------------------------------- |
+| `RMX2001_G90T_OC.sh`       | High Performance V4 / overclock — gaming & benchmarks    |
+| `RMX2001_G90T_balanced.sh` | Balanced V3 — smooth daily use with battery-safe restore |
 
 ---
 
@@ -175,11 +175,19 @@ V4 adds HyperEngine rapid-response tuning (FBT), UFS 2.1 queue tuning, touch lat
 
 ---
 
-## RMX2001_G90T_balanced.sh — Balanced Mode
+## RMX2001_G90T_balanced.sh — Balanced Mode V3
 
 Optimised for smooth everyday use. All subsystems are tuned to scale intelligently between low and high performance rather than being pinned to max. Thermal protection remains active. Battery life is preserved.
 
+V3 explicitly restores OC overrides in safe order (charging and thermal path first), then applies balanced defaults for networking, touch, storage, and scheduler behavior.
+
 ### What it does
+
+#### Charging & Thermal Restore Order
+
+- Charging is restored **first** (`stop_charging_enable` off, `mmi_charging_enable` on) before any other subsystem changes.
+- Thermal message locks are unlocked, CPU min/max limits are restored, then the thermal daemon is restarted.
+- Battery OC throttle protection is restored afterward (`battery_oc_protect_stop` -> `stop 0`).
 
 #### GED Modules
 
@@ -188,15 +196,27 @@ Optimised for smooth everyday use. All subsystems are tuned to scale intelligent
 - `gpu_idle` → 50, `ged_smart_boost` → 50 — conservative half-power boost ceiling.
 - `gx_boost_on` off; `ged_boost_enable` on.
 
+#### FPSGO / FBT Restore
+
+- FPSGO switches and advanced hooks are returned to non-OC defaults.
+- FBT (Frame Budget Tuner) is restored to balanced values:
+  - `rescue_percent` -> 50
+  - `sampling_period_MS` -> 16
+  - `floor_bound` -> 3
+
 #### CPU Mode & Scheduler
 
 - **CPU power mode 1** — balanced (not powersave, not full performance).
 - CCI mode off.
+- WALT hints are disabled for daily-use behavior (`sched_use_walt_cpu_util` and `sched_use_walt_task_util` -> 0).
 - **EAS (Energy Aware Scheduling) enabled (mode 1)** — kernel places tasks on the most energy-efficient core that can handle the load.
 
-#### I/O Scheduler
+#### I/O Scheduler (UFS 2.1 Balanced Restore)
 
-- **mq-deadline** on `mmcblk0` — better latency than CFQ for modern eMMC.
+- Primary storage path restored on **`sda`** (UFS 2.1 variant).
+- **mq-deadline** scheduler with `read_ahead_kb` -> **128** for balanced throughput/latency.
+- UFS devfreq governor restored to **`simple_ondemand`**.
+- `mmcblk0` receives matching fallback restore values when present.
 
 #### CPU Performance Node
 
@@ -231,6 +251,9 @@ Optimised for smooth everyday use. All subsystems are tuned to scale intelligent
 
 - Game touch sampling (`game_switch_enable`) → 1 — kept on for responsiveness.
 - `oplus_tp_direction` fix applied; touch limit disabled.
+- Comfortable balanced defaults restored:
+  - `smooth_level` -> **2**
+  - `sensitive_level` -> **3**
 
 #### Display — CABC
 
@@ -242,8 +265,12 @@ Optimised for smooth everyday use. All subsystems are tuned to scale intelligent
 
 #### Networking — TCP
 
-- Congestion control: **`westwood`** — designed for wireless/mobile links; handles packet loss better than cubic on mobile networks.
+- HyperEngine SLA link aggregation is disabled for daily-use power behavior (`oplus_sla/sla_enable` -> 0).
+- Congestion control: **`hybla`** — confirmed available in this kernel and suitable for mobile/high-latency paths.
 - `tcp_low_latency` → 1.
+- TCP buffers restored to balanced defaults:
+  - `tcp_rmem` -> `4096 87380 6291456`
+  - `tcp_wmem` -> `4096 16384 4194304`
 
 #### Virtual Memory (RAM Management)
 
@@ -251,6 +278,7 @@ Optimised for smooth everyday use. All subsystems are tuned to scale intelligent
 - **Swappiness → 40** — moderate; allows some swap activity while still favouring RAM.
 - `dirty_ratio` → 20, `dirty_background_ratio` → 10 — more write buffering than OC mode.
 - `dirty_writeback_centisecs` → 1500.
+- Transparent Huge Pages set to **`madvise`** for balanced performance and memory efficiency.
 
 #### CPUSet & SchedTune
 
@@ -264,32 +292,32 @@ Optimised for smooth everyday use. All subsystems are tuned to scale intelligent
 
 ## Comparison at a Glance
 
-| Feature              | OC Mode                         | Balanced Mode             |
-| -------------------- | ------------------------------- | ------------------------- |
-| CPU governor         | `performance`                   | `schedutil`               |
-| CPU frequency        | Locked to hardware max          | Free scaling within range |
-| Big cluster range    | 2050–2050 MHz (locked)          | 774–2050 MHz              |
-| Little cluster range | 2000–2000 MHz (locked)          | 500–2000 MHz              |
-| EAS scheduling       | Disabled                        | Enabled                   |
-| WALT scheduling      | Enabled                         | Not configured            |
-| GED game mode        | Full on                         | Off                       |
-| FPSGO                | Fully configured                | Not configured            |
-| FBT frame rescue     | Max aggressiveness              | Not configured            |
-| GPU power policy     | `always_on`                     | `coarse_demand`           |
-| GPU thermal bypass   | Yes (all limits ignored)        | No                        |
-| Storage path tuning  | UFS `sda` + CMDQ + queue tuning | Basic `mmcblk0` tuning    |
-| DRAM governor        | `performance` (locked max freq) | Not modified              |
-| Thermal daemon       | Stopped + locked                | Running normally          |
-| Charge pause         | Auto (if battery >= 40%)        | Not configured            |
-| Battery OC throttle  | Disabled                        | Active                    |
-| Touch profile        | smooth=0, sensitive=5           | Standard balanced profile |
-| SLA network engine   | Enabled (`oplus_sla`)           | Not configured            |
-| TCP network tuning   | `cubic` + low-latency buffers   | `westwood` + low latency  |
-| Transparent HugePage | `always`                        | Not modified              |
-| Swappiness           | 10                              | 40                        |
-| Background apps      | Killed at end                   | Left running              |
-| PowerHAL Sport Mode  | Registered for 10+ games        | Not configured            |
-| Intended use         | Gaming / benchmarks             | Daily driver              |
+| Feature              | OC Mode                         | Balanced Mode                                      |
+| -------------------- | ------------------------------- | -------------------------------------------------- |
+| CPU governor         | `performance`                   | `schedutil`                                        |
+| CPU frequency        | Locked to hardware max          | Free scaling within range                          |
+| Big cluster range    | 2050–2050 MHz (locked)          | 774–2050 MHz                                       |
+| Little cluster range | 2000–2000 MHz (locked)          | 500–2000 MHz                                       |
+| EAS scheduling       | Disabled                        | Enabled                                            |
+| WALT scheduling      | Enabled                         | Disabled                                           |
+| GED game mode        | Full on                         | Off                                                |
+| FPSGO                | Fully configured                | Not configured                                     |
+| FBT frame rescue     | Max aggressiveness              | Balanced restore (50%, 16 ms)                      |
+| GPU power policy     | `always_on`                     | `coarse_demand`                                    |
+| GPU thermal bypass   | Yes (all limits ignored)        | No                                                 |
+| Storage path tuning  | UFS `sda` + CMDQ + queue tuning | UFS `sda` mq-deadline + 128 KB + `simple_ondemand` |
+| DRAM governor        | `performance` (locked max freq) | Not modified                                       |
+| Thermal daemon       | Stopped + locked                | Running normally                                   |
+| Charge handling      | Auto pause (if battery >= 40%)  | Charging restored first                            |
+| Battery OC throttle  | Disabled                        | Active                                             |
+| Touch profile        | smooth=0, sensitive=5           | smooth=2, sensitive=3                              |
+| SLA network engine   | Enabled (`oplus_sla`)           | Disabled                                           |
+| TCP network tuning   | `cubic` + low-latency buffers   | `hybla` + restored buffers                         |
+| Transparent HugePage | `always`                        | `madvise`                                          |
+| Swappiness           | 10                              | 40                                                 |
+| Background apps      | Killed at end                   | Left running                                       |
+| PowerHAL Sport Mode  | Registered for 10+ games        | Not configured                                     |
+| Intended use         | Gaming / benchmarks             | Daily driver                                       |
 
 ---
 
