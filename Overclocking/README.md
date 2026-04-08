@@ -11,16 +11,18 @@ Author: **Arhan Das**
 
 | Script                     | Purpose                                               |
 | -------------------------- | ----------------------------------------------------- |
-| `RMX2001_G90T_OC.sh`       | Maximum performance / overclock — gaming & benchmarks |
+| `RMX2001_G90T_OC.sh`       | High Performance V4 / overclock — gaming & benchmarks |
 | `RMX2001_G90T_balanced.sh` | Balanced — smooth daily use with efficient battery    |
 
 ---
 
-## RMX2001_G90T_OC.sh — Overclock Mode
+## RMX2001_G90T_OC.sh — High Performance V4 (Overclock Mode)
 
 Pushes every subsystem to its hardware maximum. Intended for gaming sessions or benchmark runs. **Device will heat up significantly. CPU can reach ~86 °C, battery up to ~50 °C. Use at your own risk.**
 
 A `tweak()` helper function writes each value and then **chmod 444-locks** the sysfs node so Android cannot revert the setting after it is applied.
+
+V4 adds HyperEngine rapid-response tuning (FBT), UFS 2.1 queue tuning, touch latency tuning, charge-pause logic, and network-path optimizations.
 
 ### What it does
 
@@ -32,6 +34,13 @@ A `tweak()` helper function writes each value and then **chmod 444-locks** the s
 - GPU DVFS (dynamic voltage/frequency scaling) kept enabled for headroom.
 - `gx_dfps` is dynamically read from the display refresh rate and written so GED targets the correct frame rate.
 
+#### Charge Pause (Thermal Control)
+
+- Battery level is read at script start and shown in the header.
+- If battery is **>= 40%**, charging is paused (`/proc/charger/stop_charging_enable`, `/proc/charger/mmi_charging_enable`) to eliminate battery charging heat during gameplay.
+- If battery is below 40%, charging remains active for battery protection.
+- Final status block explicitly reports whether charging is paused or active.
+
 #### FPSGO — MediaTek Frame Performance Go Engine
 
 - Boosts the top-app (TA) thread aggressively (`boost_ta`, `boost_VIP`).
@@ -40,6 +49,14 @@ A `tweak()` helper function writes each value and then **chmod 444-locks** the s
 - GCC (Game CPU Control) enabled with HWUI hints for smoother UI rendering.
 - GPU boost level set to 101 (above the normal ceiling).
 
+#### FBT (Frame Budget Tuner) — HyperEngine Rapid Response
+
+- Enables the missing frame-budget rescue path with maximum aggressiveness.
+- `rescue_percent` set to **100%** (including high-refresh rescue profiles).
+- `sampling_period_MS` set to **1 ms** for fastest rescue reaction.
+- `floor_bound` set to **0** (no floor restriction) so the rescue path is never artificially limited.
+- Designed to reduce frame deadline misses by reacting before jank becomes visible.
+
 #### CPU Mode & Scheduler
 
 - **CPU power mode 3** — full performance mode (vs. 1 = balanced, 0 = powersave).
@@ -47,16 +64,26 @@ A `tweak()` helper function writes each value and then **chmod 444-locks** the s
 - CPU scheduler disabled from frequency hinting (`cpufreq_sched_disable 1`) so the governor has sole control.
 - `sched_autogroup_enabled` off, `sched_child_runs_first` on, migration cost and granularity tuned for low-latency task placement.
 - Scheduler features: `NEXT_BUDDY` (prefer the last woken sibling) and `NO_TTWU_QUEUE` (wake tasks immediately without queuing).
+- **WALT enabled** (`sched_use_walt_cpu_util`, `sched_use_walt_task_util`, `sched_walt_enable`) for improved CPU frequency/load prediction.
 - **EAS (Energy Aware Scheduling) disabled** — switches from energy-saving to pure-performance scheduling.
 
-#### I/O Scheduler
+#### I/O Scheduler (UFS 2.1 Path)
 
-- **deadline** scheduler on the eMMC block device (`mmcblk0`).
-- Read-ahead reduced to **32 KB** (lower latency over higher throughput).
+- Targets **`/dev/sda`** (UFS 2.1 on the 8/128 variant) instead of relying on eMMC-only paths.
+- Applies **deadline** scheduler and tunes queue behavior for latency:
+  - `read_ahead_kb` → 32
+  - `rq_affinity` → 1
+  - `nomerges` → 2
+- Enables UFS **CMDQ** (`/sys/block/sda/device/cmdq_en` → 1) for better command handling under burst I/O.
+- Keeps fallback tuning for `mmcblk0` when present.
 
 #### CPU Performance Node
 
 - `/sys/devices/system/cpu/perf/enable` → **1** — activates the MediaTek hardware performance assist node.
+- Additional perf assists enabled when exposed by kernel:
+  - `gpu_pmu_enable`
+  - `fuel_gauge_enable`
+  - `charger_enable`
 
 #### CPU Frequency — Locked to Maximum
 
@@ -105,10 +132,22 @@ A `tweak()` helper function writes each value and then **chmod 444-locks** the s
 - Writes a game package list to `/data/vendor/powerhal/smart` so MediaTek's PowerHAL recognises these apps and applies Sport Mode automatically:
   - Mobile Legends, BGMI / PUBG Mobile, Genshin Impact, Free Fire, Free Fire MAX, COD Mobile, PUBG: New State, PES, Apex Legends Mobile, Wild Rift.
 
+#### Touch Input Pipeline
+
+- Game touch mode stays enabled (`game_switch_enable` → 1) with direction fix and touch limit off.
+- Sensitivity profile now uses:
+  - `smooth_level` → **0** (least smoothing / sharpest response)
+  - `sensitive_level` → **5** (highest touch sensitivity)
+
 #### Networking — TCP
 
+- HyperEngine network concurrency enabled via **`oplus_sla`** (`sla_enable` → 1) for WiFi/LTE cooperative behavior where supported.
 - Congestion control: **`cubic`** (high-throughput, standard Linux default).
 - `tcp_low_latency` → 1.
+- TCP buffers tuned for low-latency gaming:
+  - `tcp_rmem` → `4096 87380 16777216`
+  - `tcp_wmem` → `4096 65536 16777216`
+- `tcp_fastopen` → 1.
 
 #### Virtual Memory (RAM Management)
 
@@ -117,6 +156,7 @@ A `tweak()` helper function writes each value and then **chmod 444-locks** the s
 - `dirty_writeback_centisecs` → 1000 (10 s interval).
 - `vfs_cache_pressure` → 80 — retains VFS dentries/inodes longer.
 - `compaction_proactiveness` → 0, `page-cluster` → 0 — no proactive memory compaction, no read-ahead on swap.
+- Transparent Huge Pages forced to **`always`** (`enabled` and `shmem_enabled`) for performance-oriented memory mapping.
 - At the end: `drop_caches 3` — forcefully frees all page cache, dentries, and inodes to give the running game maximum free RAM.
 
 #### CPUSet & SchedTune
@@ -231,14 +271,21 @@ Optimised for smooth everyday use. All subsystems are tuned to scale intelligent
 | Big cluster range    | 2050–2050 MHz (locked)          | 774–2050 MHz              |
 | Little cluster range | 2000–2000 MHz (locked)          | 500–2000 MHz              |
 | EAS scheduling       | Disabled                        | Enabled                   |
+| WALT scheduling      | Enabled                         | Not configured            |
 | GED game mode        | Full on                         | Off                       |
 | FPSGO                | Fully configured                | Not configured            |
+| FBT frame rescue     | Max aggressiveness              | Not configured            |
 | GPU power policy     | `always_on`                     | `coarse_demand`           |
 | GPU thermal bypass   | Yes (all limits ignored)        | No                        |
+| Storage path tuning  | UFS `sda` + CMDQ + queue tuning | Basic `mmcblk0` tuning    |
 | DRAM governor        | `performance` (locked max freq) | Not modified              |
 | Thermal daemon       | Stopped + locked                | Running normally          |
+| Charge pause         | Auto (if battery >= 40%)        | Not configured            |
 | Battery OC throttle  | Disabled                        | Active                    |
-| TCP congestion       | `cubic`                         | `westwood`                |
+| Touch profile        | smooth=0, sensitive=5           | Standard balanced profile |
+| SLA network engine   | Enabled (`oplus_sla`)           | Not configured            |
+| TCP network tuning   | `cubic` + low-latency buffers   | `westwood` + low latency  |
+| Transparent HugePage | `always`                        | Not modified              |
 | Swappiness           | 10                              | 40                        |
 | Background apps      | Killed at end                   | Left running              |
 | PowerHAL Sport Mode  | Registered for 10+ games        | Not configured            |

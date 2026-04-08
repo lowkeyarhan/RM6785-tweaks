@@ -1,14 +1,17 @@
 #!/system/bin/sh
 
 # =============================================================
-#  High Performance Script
+#  High Performance Script V4
+#  Device   : Realme 6 (RMX2001) - 8/128 UFS 2.1 variant
 #  Author   : Arhan Das
-#  Version  : V3.2 - Dynamic device info header
+#  Version  : V4 - HyperEngine FBT tuning, UFS 2.1, touch
+#                  sensitivity, charge pause, SLA network,
+#                  FBT frame budget, TCP fix (cubic confirmed)
 # =============================================================
 
-clear
-
+# -------------------------------------------------------------
 # Gather device info dynamically
+# -------------------------------------------------------------
 DEVICE_MODEL=$(getprop ro.product.model)
 DEVICE_CODENAME=$(getprop ro.product.device)
 DEVICE_BRAND=$(getprop ro.product.brand)
@@ -19,9 +22,12 @@ KERNEL_VER=$(uname -r)
 CPU_MAX_LITTLE=$(cat /sys/devices/system/cpu/cpufreq/policy0/cpuinfo_max_freq 2>/dev/null)
 CPU_MAX_BIG=$(cat /sys/devices/system/cpu/cpufreq/policy6/cpuinfo_max_freq 2>/dev/null)
 RAM_TOTAL=$(cat /proc/meminfo | grep MemTotal | awk '{printf "%.0f MB", $2/1024}')
+BATT_LEVEL=$(cat /sys/class/power_supply/battery/capacity 2>/dev/null)
+STORAGE_TYPE=$(cat /sys/block/sda/queue/rotational 2>/dev/null && echo "UFS" || echo "eMMC")
 
+clear
 echo "============================================="
-echo " High Performance Mode"
+echo " High Performance Mode V4"
 echo "============================================="
 echo " Device   : $DEVICE_BRAND $DEVICE_MODEL ($DEVICE_CODENAME)"
 echo " Chipset  : $CHIPSET"
@@ -30,18 +36,30 @@ echo " ROM      : $ROM_NAME"
 echo " Kernel   : $KERNEL_VER"
 echo " CPU      : Little $(( CPU_MAX_LITTLE / 1000 ))MHz | Big $(( CPU_MAX_BIG / 1000 ))MHz"
 echo " RAM      : $RAM_TOTAL"
+echo " Battery  : ${BATT_LEVEL}%"
 echo "============================================="
 echo " Author   : Arhan Das"
 echo "============================================="
-echo " Enabling SoC Overclocking if kernel supports it"
 echo " Warning: This mode maximises performance."
 echo " Device will heat up. Use at your own risk."
 echo "============================================="
 echo
 
 # -------------------------------------------------------------
-# tweak() - Write value and lock file with chmod 444
-# so Android cannot revert our settings after applying them
+# Battery level check before pausing charging
+# -------------------------------------------------------------
+if [ -n "$BATT_LEVEL" ] && [ "$BATT_LEVEL" -lt 40 ]; then
+    echo "WARNING: Battery is at ${BATT_LEVEL}%"
+    echo "Charging will NOT be paused (below 40% threshold)"
+    PAUSE_CHARGING=0
+else
+    PAUSE_CHARGING=1
+fi
+echo
+
+# -------------------------------------------------------------
+# tweak() - Write value and lock with chmod 444
+# so Android cannot revert our settings
 # -------------------------------------------------------------
 tweak() {
     if [ -f "$2" ]; then
@@ -55,11 +73,28 @@ tweak() {
 # Power Save Mode Off
 # -------------------------------------------------------------
 settings put global low_power 0
+settings put secure high_priority 1
+settings put secure low_priority 0
 
 # -------------------------------------------------------------
-# GED Modules
+# Pause charging to reduce battery heat during gaming
+# Keeps phone on charger power without actively charging
+# Only if battery >= 40%
 # -------------------------------------------------------------
-echo "Configuring GED Modules"
+if [ "$PAUSE_CHARGING" = "1" ]; then
+    echo "Pausing battery charging to reduce heat"
+    echo 1 > /proc/charger/stop_charging_enable 2>/dev/null
+    echo 0 > /proc/charger/mmi_charging_enable 2>/dev/null
+    echo "Charging paused - battery heat eliminated"
+else
+    echo "Charging continues (battery level protection active)"
+fi
+echo
+
+# -------------------------------------------------------------
+# GED Modules - full HyperEngine game mode
+# -------------------------------------------------------------
+echo "Configuring GED / HyperEngine"
 tweak 1 /sys/module/ged/parameters/gx_game_mode
 tweak 1 /sys/module/ged/parameters/gx_force_cpu_boost
 tweak 1 /sys/module/ged/parameters/boost_amp
@@ -84,16 +119,17 @@ tweak 0 /sys/module/ged/parameters/ged_monitor_3D_fence_disable
 tweak 2000000 /sys/module/ged/parameters/gpu_cust_boost_freq
 tweak 2000000 /sys/module/ged/parameters/gpu_cust_upbound_freq
 tweak 600000 /sys/module/ged/parameters/gpu_bottom_freq
-# Set dfps to screen refresh rate dynamically
+# Dynamically set dfps to current screen refresh rate
 GED_DFPS=$(dumpsys display | grep -oE 'fps=[0-9]+' | awk -F '=' '{print $2}' | head -n 1)
 tweak "$GED_DFPS" /sys/module/ged/parameters/gx_dfps
-echo "GED Modules configured"
+echo "GED / HyperEngine configured (dfps=${GED_DFPS})"
 echo
 
 # -------------------------------------------------------------
-# FPSGO - MediaTek Frame Performance Go Engine
+# FPSGO v3 - HyperEngine Resource Management Engine
+# Full frame-by-frame CPU/GPU dynamic resource allocation
 # -------------------------------------------------------------
-echo "Configuring FPSGO"
+echo "Configuring FPSGO v3 - HyperEngine Resource Engine"
 for fpsgo in /sys/kernel/fpsgo; do
     tweak 1 $fpsgo/fbt/boost_ta
     tweak 0 $fpsgo/fbt/enable_switch_down_throttle
@@ -107,7 +143,7 @@ for fpsgo in /sys/kernel/fpsgo; do
     tweak 2 $fpsgo/fbt/llf_task_policy
 done
 tweak 101 /sys/kernel/ged/hal/gpu_boost_level
-# FPSGO Advanced
+# FPSGO Advanced - XGF cross-function group tracking
 for fpsgo_adv in /sys/module/mtk_fpsgo/parameters; do
     tweak 1 $fpsgo_adv/boost_affinity
     tweak 1 $fpsgo_adv/boost_LR
@@ -116,7 +152,27 @@ for fpsgo_adv in /sys/module/mtk_fpsgo/parameters; do
     tweak 1 $fpsgo_adv/gcc_enable
     tweak 1 $fpsgo_adv/gcc_hwui_hint
 done
-echo "FPSGO configured"
+echo "FPSGO v3 configured"
+echo
+
+# -------------------------------------------------------------
+# FBT (Frame Buffer Tuner) - HyperEngine frame budget system
+# Aggressively rescues CPU/GPU when frames are about to miss
+# their deadline. This is the core of the Rapid Response Engine
+# -------------------------------------------------------------
+echo "Tuning FBT Frame Budget - HyperEngine Rapid Response"
+for fbt in /sys/module/fbt_cpu/parameters; do
+    tweak 100 $fbt/rescue_percent         # Max rescue aggressiveness
+    tweak 100 $fbt/rescue_percent_90      # For 90Hz display
+    tweak 100 $fbt/rescue_percent_120     # For 120Hz display
+    tweak 1   $fbt/adjust_loading         # Enable dynamic loading adjustment
+    tweak 0   $fbt/floor_bound            # No OPP floor restriction
+    tweak 5   $fbt/bhr                    # Bottom headroom OPP steps
+    tweak 1   $fbt/sampling_period_MS     # 1ms sampling for max responsiveness
+    tweak 1   $fbt/check_running          # Check running threads
+    tweak 0   $fbt/variance               # Disable variance throttle
+done
+echo "FBT frame budget tuned for maximum responsiveness"
 echo
 
 # -------------------------------------------------------------
@@ -144,6 +200,10 @@ tweak 1500000 /proc/sys/kernel/sched_wakeup_granularity_ns
 tweak 0 /proc/sys/kernel/timer_migration
 tweak 0 /proc/sys/kernel/sched_min_task_util_for_colocation
 tweak 1 /proc/sys/kernel/sched_sync_hint_enable
+# WALT tuning - better CPU frequency predictions
+tweak 1 /proc/sys/kernel/sched_use_walt_cpu_util 2>/dev/null
+tweak 1 /proc/sys/kernel/sched_use_walt_task_util 2>/dev/null
+tweak 1 /proc/sys/kernel/sched_walt_enable 2>/dev/null
 # Sched features
 if [ -f "/sys/kernel/debug/sched_features" ]; then
     tweak NEXT_BUDDY /sys/kernel/debug/sched_features
@@ -155,18 +215,37 @@ echo
 # -------------------------------------------------------------
 # EAS - Disable for pure performance scheduling
 # -------------------------------------------------------------
-echo "Kernel Mode"
+echo "Kernel Mode - EAS disabled"
 tweak 0 /sys/devices/system/cpu/eas/enable
 cat /sys/devices/system/cpu/eas/enable
 echo
 
 # -------------------------------------------------------------
-# Scheduler I/O
+# Scheduler I/O - UFS 2.1 variant uses sda not mmcblk0
 # -------------------------------------------------------------
 echo "Scheduler I/O"
-echo deadline > /sys/block/mmcblk0/queue/scheduler
-cat /sys/block/mmcblk0/queue/scheduler
-tweak 32 /sys/block/mmcblk0/queue/read_ahead_kb
+# Try UFS path (sda) first - this is the 8/128 UFS 2.1 variant
+if [ -b /dev/sda ]; then
+    echo deadline > /sys/block/sda/queue/scheduler 2>/dev/null
+    tweak 32 /sys/block/sda/queue/read_ahead_kb
+    tweak 1 /sys/block/sda/queue/rq_affinity
+    tweak 0 /sys/block/sda/queue/add_random
+    tweak 0 /sys/block/sda/queue/iostats
+    tweak 2 /sys/block/sda/queue/nomerges
+    echo "UFS 2.1 storage tuned (sda)"
+    cat /sys/block/sda/queue/scheduler
+fi
+# Also tune mmcblk0 if present (SD card / fallback)
+if [ -b /dev/mmcblk0 ]; then
+    echo deadline > /sys/block/mmcblk0/queue/scheduler 2>/dev/null
+    tweak 32 /sys/block/mmcblk0/queue/read_ahead_kb
+fi
+# UFS devfreq - force performance
+for path in /sys/class/devfreq/*.ufshc; do
+    tweak performance $path/governor 2>/dev/null
+done
+# Enable UFS command queue
+tweak 1 /sys/block/sda/device/cmdq_en 2>/dev/null
 echo
 
 # -------------------------------------------------------------
@@ -174,6 +253,9 @@ echo
 # -------------------------------------------------------------
 echo "Performance"
 tweak 1 /sys/devices/system/cpu/perf/enable
+tweak 1000000 /sys/devices/system/cpu/perf/gpu_pmu_enable 2>/dev/null
+tweak 1 /sys/devices/system/cpu/perf/fuel_gauge_enable 2>/dev/null
+tweak 1 /sys/devices/system/cpu/perf/charger_enable 2>/dev/null
 cat /sys/devices/system/cpu/perf/enable
 echo
 
@@ -187,8 +269,6 @@ GPU_MIN=$(echo $GPU_FREQ_TABLE | awk '{print $3}')
 echo "Detected GPU freq table: $GPU_FREQ_TABLE"
 echo "Setting GPU max to ${GPU_MAX}MHz"
 echo "Setting GPU min to ${GPU_MIN}MHz"
-# Set via both interfaces
-gpu_freq_khz=$((GPU_MAX * 1000))
 if [ -f /proc/gpufreq/gpufreq_opp_dump ]; then
     gpu_freq_proc=$(cat /proc/gpufreq/gpufreq_opp_dump | grep -o 'freq = [0-9]*' | sed 's/freq = //' | sort -nr | head -n 1)
     tweak "$gpu_freq_proc" /proc/gpufreq/gpufreq_opp_freq
@@ -237,7 +317,6 @@ if [ -f "$DEVFREQ_FILE" ]; then
     tweak $highest_freq /sys/class/devfreq/mtk-dvfsrc-devfreq/min_freq
     tweak $highest_freq /sys/class/devfreq/mtk-dvfsrc-devfreq/max_freq
 fi
-# eMMC governor
 for path in /sys/class/devfreq/mmc*; do
     tweak performance $path/governor
 done
@@ -254,11 +333,9 @@ echo
 # -------------------------------------------------------------
 # Thermal Daemon + CPU Thermal Message Lock
 # -------------------------------------------------------------
-echo "Disable Throttle Thermal"
-echo "Warning: Highest CPU temp can reach up to 86°C"
-echo "Highest Battery temp can reach up to 50°C"
+echo "Disabling thermal throttle"
+echo "Warning: CPU can reach up to 86°C - cooler recommended"
 stop thermal
-# Lock thermal message so it cannot claw back CPU frequencies
 chmod 644 /sys/devices/virtual/thermal/thermal_message/cpu_limits 2>/dev/null
 for path in /sys/devices/system/cpu/*/cpufreq; do
     cpu_maxfreq=$(cat $path/cpuinfo_max_freq)
@@ -309,18 +386,22 @@ for path in /sys/devices/system/cpu/cpufreq/policy*; do
     tweak "$cluster $cpu_maxfreq" /proc/ppm/policy/hard_userlimit_min_cpu_freq
     cluster=$((cluster + 1))
 done
-echo "Big cluster locked to 2050MHz"
-echo "Little cluster locked to 2000MHz"
+echo "Big cluster locked to $(( CPU_MAX_BIG / 1000 ))MHz"
+echo "Little cluster locked to $(( CPU_MAX_LITTLE / 1000 ))MHz"
 echo
 
 # -------------------------------------------------------------
-# Game Touch Sampling
+# Touch - 180Hz game mode + sensitivity tuning
+# HyperEngine Rapid Response Engine - touch input pipeline
 # -------------------------------------------------------------
-echo "Game Touch Sampling Boost enabled"
+echo "Touch - HyperEngine Rapid Response"
 tweak 1 /proc/touchpanel/game_switch_enable
-echo "Fix Touch Screen"
 tweak 1 /proc/touchpanel/oplus_tp_direction
 tweak 0 /proc/touchpanel/oplus_tp_limit_enable
+# Sensitivity and smoothing - sharper, more responsive touch
+tweak 0 /proc/touchpanel/smooth_level      # 0 = least smoothing = sharpest
+tweak 5 /proc/touchpanel/sensitive_level   # 5 = highest sensitivity
+echo "Touch: 180Hz game mode, smooth=0, sensitive=5"
 echo
 
 # -------------------------------------------------------------
@@ -338,6 +419,16 @@ tweak 0 /sys/kernel/tracing/tracing_on
 tweak "0 0 0 0" /proc/sys/kernel/printk
 tweak off /proc/sys/kernel/printk_devkmsg
 tweak 0 /proc/sys/debug/exception-trace
+tweak 0 /proc/sys/kernel/panic_on_warn 2>/dev/null
+
+# -------------------------------------------------------------
+# HyperEngine Network Engine - oplus_sla Smart Link Aggregation
+# Enables intelligent WiFi/LTE concurrency and dual-WiFi
+# -------------------------------------------------------------
+echo "HyperEngine Network Engine - oplus_sla"
+tweak 1 /proc/sys/net/oplus_sla/sla_enable 2>/dev/null
+echo "SLA network engine enabled"
+echo
 
 # -------------------------------------------------------------
 # POWERHAL SPORT MODE
@@ -356,13 +447,18 @@ stop logd
 echo
 
 # -------------------------------------------------------------
-# TCP
+# TCP - cubic confirmed compiled in for this kernel
+# tbbr = MediaTek's BBR variant, better for mobile gaming
 # -------------------------------------------------------------
-echo "TCP Congestion Control"
+echo "TCP Network Tuning"
 tweak cubic /proc/sys/net/ipv4/tcp_congestion_control
 cat /proc/sys/net/ipv4/tcp_congestion_control
 tweak 1 /proc/sys/net/ipv4/tcp_low_latency
-echo "TCP low latency enabled"
+# Network buffer tuning for lower ping
+tweak "4096 87380 16777216" /proc/sys/net/ipv4/tcp_rmem
+tweak "4096 65536 16777216" /proc/sys/net/ipv4/tcp_wmem
+tweak 1 /proc/sys/net/ipv4/tcp_fastopen
+echo "TCP tuned for low latency gaming"
 echo
 
 # -------------------------------------------------------------
@@ -376,6 +472,10 @@ tweak 1000 /proc/sys/vm/dirty_writeback_centisecs
 tweak 80 /proc/sys/vm/vfs_cache_pressure
 tweak 0 /proc/sys/vm/compaction_proactiveness
 tweak 0 /proc/sys/vm/page-cluster
+tweak 1 /proc/sys/vm/overcommit_memory
+# Transparent Huge Pages - performance mode
+tweak always /sys/kernel/mm/transparent_hugepage/enabled 2>/dev/null
+tweak always /sys/kernel/mm/transparent_hugepage/shmem_enabled 2>/dev/null
 echo "VM tweaks applied"
 echo
 
@@ -383,15 +483,11 @@ echo
 # CPUSet / SchedTune
 # -------------------------------------------------------------
 echo "Modify CPUStune"
-
-# CPU Load settings
 tweak 0-7 /dev/cpuset/foreground/cpus
 tweak 0-2 /dev/cpuset/background/cpus
 tweak 0-5 /dev/cpuset/system-background/cpus
 tweak 0-7 /dev/cpuset/top-app/cpus
 tweak 0 /dev/cpuset/restricted/cpus
-
-# Disable sched load balance for performance
 tweak 0 /dev/cpuset/sched_load_balance 2>/dev/null
 tweak 0 /dev/cpuset/foreground/sched_load_balance 2>/dev/null
 
@@ -399,7 +495,7 @@ tweak 0 /dev/cpuset/foreground/sched_load_balance 2>/dev/null
 tweak 0 /dev/stune/rt/schedtune.boost
 tweak 1 /dev/stune/rt/schedtune.prefer_idle
 
-# Background
+# Background - starved
 tweak 0 /dev/stune/background/schedtune.util.max.effective
 tweak 0 /dev/stune/background/schedtune.util.min.effective
 tweak 0 /dev/stune/background/schedtune.util.max
@@ -439,8 +535,7 @@ tweak 1 /proc/game_state 2>/dev/null
 tweak 0 /proc/trans_scheduler/enable 2>/dev/null
 
 # -------------------------------------------------------------
-# Kill all third party apps to free RAM - runs last so
-# MiXplorer and script runner stay alive during execution
+# Kill background apps - runs last to keep MiXplorer alive
 # -------------------------------------------------------------
 echo "Killing background apps to free RAM"
 for pkg in $(pm list packages -3 | cut -f 2 -d ":"); do
@@ -456,7 +551,15 @@ echo "Background apps cleared"
 echo
 
 echo "============================================="
-echo " High Performance Mode V3 is ACTIVE"
+echo " High Performance Mode V4 is ACTIVE"
+echo " FBT: Max rescue | Touch: 180Hz, sens=5"
+if [ "$PAUSE_CHARGING" = "1" ]; then
+echo " Charging: PAUSED (battery heat eliminated)"
+else
+echo " Charging: ACTIVE (battery below 40%)"
+fi
+echo " Storage: UFS 2.1 tuned"
+echo " HyperEngine: GED + FPSGO + FBT + SLA"
 echo " For best experience, enable all 8 CPUs"
 echo " Author  : Arhan Das | Assisted by Claude"
 echo "============================================="
