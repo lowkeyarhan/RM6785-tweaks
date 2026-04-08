@@ -1,0 +1,1 @@
+This shall contain magisk/kernelSU flashable modules for RMX6785 devices
